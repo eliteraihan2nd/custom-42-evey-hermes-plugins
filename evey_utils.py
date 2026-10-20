@@ -51,21 +51,89 @@ LITELLM_KEY = os.environ.get("OPENAI_API_KEY", "")
 # thinking budget. It is not listed by /v1/models but is accepted at call time;
 # it is what keeps short structured answers (validate/reflect verdicts) from
 # being truncated by reasoning tokens.
+#
+# FALLBACKS ARE CHOSEN BY *ROUTE*, NOT BY MODEL FAMILY. A role whose only
+# candidate is "kc/..." dies entirely when the kilocode provider 502s; one whose
+# only candidate is "apnx/..." dies on a 402 (no credits — that whole route is
+# unpaid on this host). Each list below therefore spans DIFFERENT providers,
+# so one provider's outage costs a retry, not the role.
+#
+# Verified live 2026-10-20 against /v1/chat/completions (HTTP 200 + non-empty
+# content + the upstream named in the response "model" field):
+#   combo/fast-mini                             -> cohere/north-mini-code:free
+#   kc/nvidia/nemotron-3-ultra-550b-a55b:free    -> nvidia/nemotron-3-ultra-550b-a55b:free
+#   cmd/nvidia/nemotron-3-ultra-550b-a55b        -> nvidia/nemotron-3-ultra-550b-a55b
+#   th/mimo-v2.6-flash:free                      -> mimo-v2.6-flash:free
+#   openrouter/poolside/laguna-s-2.1:free        -> poolside/laguna-s-2.1:free
+#   cmd/poolside/laguna-s-2.1-free               -> poolside/laguna-s-2.1-free
+#   openrouter/dots-studio/dots-3-note-preview:free -> dots-studio/dots-3-note-preview:free
+#   cmd/reflection/beam:free                     -> reflection/beam:free
+#   kc/reflection/beam-free                      -> reflection/beam-free
+#   kc/nvidia/nemotron-3.5-super-vl:free         -> nvidia/nemotron-3.5-super-vl:free
+#   cmd/nvidia/nemotron-3.5-super-vl             -> nvidia/nemotron-3.5-super-vl
+#   kc/minimax/minimax-m3.1-flash:free           -> minimax/minimax-m3.1-flash:free
+# Rejected on evidence: apnx/* (402 insufficient balance), kc/kat-coder-* and
+# kc/qwen3-coder-* (400 "not available in the active live catalog for provider
+# kilocode"), cfp/* (502 browser session).
 DEFAULT_MODEL_MAP = {
     # role → ordered candidate list (first is preferred, rest are fallbacks)
-    "code": ["combo/fast-mini"],
-    "reasoning": ["kc/nvidia/nemotron-3-ultra-550b-a55b:free"],
-    "research": ["th/mimo-v2.6-flash:free"],
-    "summary": ["th/mimo-v2.6-flash:free"],
-    "analysis": ["openrouter/poolside/laguna-s-2.1:free"],
-    "creative": ["openrouter/dots-studio/dots-3-note-preview:free"],
-    "vision": ["kc/nvidia/nemotron-3.5-super-vl:free"],
-    "uncensored": ["kc/reflection/beam-free"],
-    "delegate": ["kc/minimax/minimax-m3.1-flash:free"],
-    "critique": ["no-think/th/mimo-v2.6-flash:free"],
-    "validate": ["no-think/th/mimo-v2.6-flash:free"],
-    "judge": ["kc/nvidia/nemotron-3-ultra-550b-a55b:free"],
+    "code": [
+        "combo/fast-mini",
+        "kc/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "cmd/nvidia/nemotron-3-ultra-550b-a55b",
+    ],
+    "reasoning": [
+        "kc/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "cmd/nvidia/nemotron-3-ultra-550b-a55b",
+        "th/mimo-v2.6-flash:free",
+    ],
+    "research": [
+        "th/mimo-v2.6-flash:free",
+        "openrouter/poolside/laguna-s-2.1:free",
+        "cmd/poolside/laguna-s-2.1-free",
+    ],
+    "summary": [
+        "th/mimo-v2.6-flash:free",
+        "cmd/poolside/laguna-s-2.1-free",
+    ],
+    "analysis": [
+        "openrouter/poolside/laguna-s-2.1:free",
+        "cmd/poolside/laguna-s-2.1-free",
+        "kc/nvidia/nemotron-3-ultra-550b-a55b:free",
+    ],
+    "creative": [
+        "openrouter/dots-studio/dots-3-note-preview:free",
+        "cmd/reflection/beam:free",
+    ],
+    "vision": [
+        "cmd/nvidia/nemotron-3.5-super-vl",
+        "kc/nvidia/nemotron-3.5-super-vl:free",
+    ],
+    "uncensored": [
+        "kc/reflection/beam-free",
+        "cmd/reflection/beam:free",
+    ],
+    "delegate": [
+        "kc/minimax/minimax-m3.1-flash:free",
+        "th/mimo-v2.6-flash:free",
+        "cmd/poolside/laguna-s-2.1-free",
+    ],
+    "critique": [
+        "no-think/th/mimo-v2.6-flash:free",
+        "cmd/poolside/laguna-s-2.1-free",
+    ],
+    "validate": [
+        "no-think/th/mimo-v2.6-flash:free",
+        "cmd/poolside/laguna-s-2.1-free",
+    ],
+    "judge": [
+        "kc/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "cmd/nvidia/nemotron-3-ultra-550b-a55b",
+        "cmd/poolside/laguna-s-2.1-free",
+    ],
     # Three members, three different upstreams — the point of a council.
+    # Verified served by: mimo-v2.6-flash:free, reflection/beam-free,
+    # poolside/laguna-s-2.1:free (all three distinct, 2026-10-20).
     "council": [
         "th/mimo-v2.6-flash:free",
         "kc/reflection/beam-free",
@@ -147,15 +215,24 @@ def call_model(model, prompt, max_tokens=2000, temperature=0.7, retries=2, timeo
 
     Returns dict: {"content": str, "tokens": int, "model": str, "attempts": int}
     Returns None on total failure.
+
+    Reasoning models spend their budget on thinking tokens before emitting any
+    content: a 24-token request to a thinking model comes back with
+    finish_reason="length", empty content, and 22 reasoning tokens. Treating
+    that as a hard failure makes every short request to such a model fail
+    forever. So when the response is truncated by the token budget, the call is
+    RETRIED with a larger budget instead of being raised on.
     """
-    data = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }).encode()
+    attempt_max_tokens = max_tokens
 
     for attempt in range(1, retries + 2):
+        data = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": attempt_max_tokens,
+            "temperature": temperature,
+        }).encode()
+
         try:
             req = urllib.request.Request(
                 f"{LITELLM_URL}/chat/completions",
@@ -172,9 +249,12 @@ def call_model(model, prompt, max_tokens=2000, temperature=0.7, retries=2, timeo
             msg = result["choices"][0]["message"]
             content = msg.get("content", "") or ""
             usage = result.get("usage", {})
+            finish = (result.get("choices") or [{}])[0].get("finish_reason")
 
-            # Reasoning recovery — extract from think-only responses
-            if not content.strip():
+            # Reasoning recovery — extract from think-only responses.
+            # Only valid when the model actually FINISHED; a truncated
+            # reasoning block is half a thought, not an answer.
+            if not content.strip() and finish != "length":
                 reasoning = (
                     msg.get("reasoning_content")
                     or msg.get("reasoning")
@@ -184,6 +264,16 @@ def call_model(model, prompt, max_tokens=2000, temperature=0.7, retries=2, timeo
                     content = str(reasoning).strip()
 
             if not content.strip():
+                if finish == "length":
+                    # Thinking consumed the whole budget. Give it more room
+                    # rather than retrying the same doomed request.
+                    attempt_max_tokens = min(attempt_max_tokens * 4, 16000)
+                    logger.info(
+                        "Model %s truncated its reasoning budget (%d tokens); "
+                        "retrying with max_tokens=%d", model, attempt_max_tokens // 4, attempt_max_tokens,
+                    )
+                    if attempt <= retries:
+                        continue
                 raise ValueError("Empty response from model")
 
             return {
@@ -198,6 +288,36 @@ def call_model(model, prompt, max_tokens=2000, temperature=0.7, retries=2, timeo
                 return None
             time.sleep(2 ** attempt)
     return None
+
+
+def call_first_available(models, prompt, max_tokens=2000, temperature=0.7, retries=2, timeout=60):
+    """Call each candidate model in order until one answers.
+
+    This is what makes a role's FALLBACK LIST real. resolve_models() returns an
+    ordered list of candidates; without this, only the first is ever tried and
+    a provider outage takes the whole role down.
+    """
+    if isinstance(models, str):
+        models = [models]
+    last_error = None
+    for model in models:
+        result = call_model(model, prompt, max_tokens=max_tokens,
+                            temperature=temperature, retries=retries, timeout=timeout)
+        if result and (result.get("content") or "").strip():
+            return result
+        last_error = f"{model}: no content"
+        logger.warning("Fallback candidate %s produced no content; trying next", model)
+    if last_error:
+        logger.warning("All fallback candidates failed: %s", last_error)
+    return None
+
+
+def call_role(role, prompt, default=None, max_tokens=2000, temperature=0.7, retries=2, timeout=60):
+    """Call the role's preferred model, falling through its candidate list."""
+    return call_first_available(
+        resolve_models(role, default), prompt,
+        max_tokens=max_tokens, temperature=temperature, retries=retries, timeout=timeout,
+    )
 
 
 def http_get(url, timeout=10):

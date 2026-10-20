@@ -33,8 +33,9 @@ _eu = _load_evey_utils()
 call_llm = _eu.call_llm
 
 # Upstream pinned "qwen35-4b", a local model that no longer exists on the host
-# gateway. The "critique" role resolves through the model map instead.
-CRITIQUE_MODEL = _eu.resolve_model("critique", default="qwen35-4b")
+# gateway. The "critique" role resolves through the model map instead — the
+# whole candidate LIST, so a dead provider falls through to the next route.
+CRITIQUE_MODELS = _eu.resolve_models("critique", default=["qwen35-4b"])
 MAX_ITERATIONS = 3
 
 SCHEMA = {
@@ -90,8 +91,8 @@ def _critique(prompt):
     # Upstream budget was 200 tokens; on a reasoning-model target that budget is consumed
     # by reasoning (finish_reason=length, critique cut mid-sentence). 400 returns the
     # complete verdict.
-    result = call_llm(CRITIQUE_MODEL, prompt, max_tokens=400, temperature=0.3)
-    return result or "PASS: Critique unavailable"
+    result = _eu.call_first_available(CRITIQUE_MODELS, prompt, max_tokens=400, temperature=0.3)
+    return (result or {}).get("content") or "PASS: Critique unavailable"
 
 
 def handler(args, **kwargs):

@@ -137,21 +137,33 @@ def _save_cache(cache):
     return cache
 
 
-def _delegate_fresh(model, goal, context, max_tokens):
-    """Call model via shared evey_utils (includes retry + reasoning recovery)."""
+def _delegate_fresh(models, goal, context, max_tokens):
+    """Call model via shared evey_utils (includes retry + reasoning recovery).
+
+    *models* is a candidate LIST: each is tried in order until one answers, so
+    a dead provider route costs a retry rather than the whole delegation.
+    """
     prompt = goal
     if context:
         prompt = f"CONTEXT:\n{context}\n\nTASK:\n{goal}\n\nIMPORTANT: Always respond in English."
 
-    result = call_model(model, prompt, max_tokens=max_tokens, temperature=0.7, timeout=120)
+    if isinstance(models, str):
+        models = [models]
+    result = _eu.call_first_available(models, prompt, max_tokens=max_tokens,
+                                       temperature=0.7, timeout=120)
     if result is None:
-        raise RuntimeError(f"{model} returned empty after retries")
+        raise RuntimeError(f"{models} returned empty after retries")
     return result["content"], result["tokens"]
 
 
 def handler(args, **kwargs):
     try:
-        model = args.get("model") or _eu.resolve_model("delegate", default="mimo-v2-pro")
+        # The "delegate" role's candidate LIST: first is preferred, the rest
+        # are fallbacks on a different route. A user-specified model wins and
+        # is used alone (their explicit choice is not silently swapped).
+        requested = args.get("model")
+        candidates = [requested] if requested else _eu.resolve_models("delegate", default=["mimo-v2-pro"])
+        model = candidates[0]
         goal = args.get("goal", "")
         context = args.get("context", "")
         max_tokens = args.get("max_tokens", 2000)
@@ -195,7 +207,7 @@ def handler(args, **kwargs):
         # Cache miss — delegate fresh
         logger.info(f"Cache MISS: key={key}, delegating to {model}")
         try:
-            content, tokens = _delegate_fresh(model, goal, context, max_tokens)
+            content, tokens = _delegate_fresh(candidates, goal, context, max_tokens)
         except Exception as e:
             return json.dumps({
                 "status": "delegation_failed",

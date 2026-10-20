@@ -39,8 +39,10 @@ _eu = _load_evey_utils()
 call_llm = _eu.call_llm
 
 # Upstream pinned "qwen35-4b", a local model that no longer exists on the host
-# gateway. The "validate" role resolves through the model map instead.
-VALIDATE_MODEL = _eu.resolve_model("validate", default="qwen35-4b")
+# gateway. The "validate" role resolves through the model map instead — and
+# keeps the WHOLE candidate list, so a dead provider falls through to the next
+# route instead of failing the role.
+VALIDATE_MODELS = _eu.resolve_models("validate", default=["qwen35-4b"])
 
 SCHEMA = {
     "name": "validate_output",
@@ -101,9 +103,9 @@ def _validate_llm(prompt):
     # Upstream budget was 100 tokens; on a reasoning-model target the budget is consumed
     # by reasoning (finish_reason=length, no "SCORE: N" in the output), so the caller
     # silently fell back to score 5 / CAUTION for correct input. 400 returns a real
-    # assessment.
-    result = call_llm(VALIDATE_MODEL, prompt, max_tokens=400, temperature=0)
-    return result or "SCORE: 5 | ISSUES: Validation unavailable"
+    # assessment. The candidate LIST is used so a dead provider falls through.
+    result = _eu.call_first_available(VALIDATE_MODELS, prompt, max_tokens=400, temperature=0)
+    return (result or {}).get("content") or "SCORE: 5 | ISSUES: Validation unavailable"
 
 
 def handler(args, **kwargs):

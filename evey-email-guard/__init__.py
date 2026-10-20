@@ -146,7 +146,11 @@ def _llm_classify(content):
         reply = call_llm(SCREENING_MODEL, prompt, max_tokens=10, temperature=0)
 
         if not reply:
-            return "safe"  # Default safe if screening fails
+            # Fail CLOSED (upstream's unmerged harden/trust-boundaries branch):
+            # a screen that cannot run must not bless the content. Upstream
+            # returned "safe" here, which silently passed anything the model
+            # failed to classify.
+            return "suspicious"
 
         reply = reply.upper()
         if "BLOCKED" in reply:
