@@ -9,7 +9,7 @@ import json
 import os
 import time
 
-CHECKPOINT_DIR = os.path.expanduser("~/.hermes/workspace/checkpoints")
+CHECKPOINT_DIR = os.path.join(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"), "workspace", "checkpoints")
 
 CHECKPOINT_SCHEMA = {
     "name": "session_checkpoint",

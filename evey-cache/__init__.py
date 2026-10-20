@@ -16,6 +16,32 @@ from pathlib import Path
 
 logger = logging.getLogger("evey.cache")
 
+# Shared util: load by file path. The bare `from evey_utils import ...` upstream
+# assumes the plugins/ directory is on sys.path at call time; it is not.
+import importlib.util as _iu, os as _os
+
+
+def _load_evey_utils():
+    """Load the shared evey_utils module.
+
+    Sibling first: a plugin dir that carries its own copy is self-contained.
+    Parent second: the whole-repo layout, where evey_utils.py sits one level up.
+    """
+    for _cand in (
+        _os.path.join(_os.path.dirname(__file__), "evey_utils.py"),
+        _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "evey_utils.py"),
+    ):
+        if _os.path.exists(_cand):
+            _spec = _iu.spec_from_file_location("evey_utils", _cand)
+            _mod = _iu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            return _mod
+    raise ImportError("evey_utils.py not found next to or above this plugin")
+
+
+_eu = _load_evey_utils()
+call_model = _eu.call_model
+
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
 CACHE_DIR = HERMES_HOME / "workspace" / "orchestrator"
 CACHE_FILE = CACHE_DIR / "delegation-cache.json"
@@ -39,7 +65,7 @@ SCHEMA = {
         "properties": {
             "model": {
                 "type": "string",
-                "description": "Model to use (e.g., 'mimo-v2-pro', 'llama70b-free')",
+                "description": "Model to use (defaults to the host's 'delegate' role from the model map)",
             },
             "goal": {
                 "type": "string",
@@ -113,8 +139,6 @@ def _save_cache(cache):
 
 def _delegate_fresh(model, goal, context, max_tokens):
     """Call model via shared evey_utils (includes retry + reasoning recovery)."""
-    from evey_utils import call_model
-
     prompt = goal
     if context:
         prompt = f"CONTEXT:\n{context}\n\nTASK:\n{goal}\n\nIMPORTANT: Always respond in English."
@@ -127,7 +151,7 @@ def _delegate_fresh(model, goal, context, max_tokens):
 
 def handler(args, **kwargs):
     try:
-        model = args.get("model", "mimo-v2-pro")
+        model = args.get("model") or _eu.resolve_model("delegate", default="mimo-v2-pro")
         goal = args.get("goal", "")
         context = args.get("context", "")
         max_tokens = args.get("max_tokens", 2000)

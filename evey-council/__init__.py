@@ -14,22 +14,43 @@ import os
 import time
 
 import importlib.util as _iu, os as _os
-_spec = _iu.spec_from_file_location("evey_utils", _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "evey_utils.py"))
-_eu = _iu.module_from_spec(_spec)
-_spec.loader.exec_module(_eu)
+
+
+def _load_evey_utils():
+    """Load the shared evey_utils module.
+
+    Sibling first: a plugin dir that carries its own copy is self-contained.
+    Parent second: the whole-repo layout, where evey_utils.py sits one level up.
+    """
+    for _cand in (
+        _os.path.join(_os.path.dirname(__file__), "evey_utils.py"),
+        _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "evey_utils.py"),
+    ):
+        if _os.path.exists(_cand):
+            _spec = _iu.spec_from_file_location("evey_utils", _cand)
+            _mod = _iu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            return _mod
+    raise ImportError("evey_utils.py not found next to or above this plugin")
+
+
+_eu = _load_evey_utils()
 call_model = _eu.call_model
+resolve_models = _eu.resolve_models
+resolve_model = _eu.resolve_model
 
 logger = logging.getLogger("evey.council")
 
-# Council members — all FREE cloud models
-COUNCIL_MODELS = [
-    "mimo-v2-pro",
-    "llama70b-free",
-    "qwen-coder-free",
-]
+# Council members — upstream shipped three free-cloud aliases ("mimo-v2-pro",
+# "llama70b-free", "qwen-coder-free") that no longer exist on any current gateway.
+# The model map replaces them with ids whose upstreams are DISTINCT, which is the
+# whole point of a council: three different models, not one model asked three times.
+# Override the roster with plugins.evey-model-map.council in the host config.
+COUNCIL_MODELS = resolve_models("council", default=["mimo-v2-pro", "llama70b-free", "qwen-coder-free"])
 
-# Judge — synthesizes the best answer
-JUDGE_MODEL = "mimo-v2-pro"
+# Judge — synthesizes the best answer. Deliberately a different upstream than the
+# members, so the judge is not just a fifth vote from the same model.
+JUDGE_MODEL = resolve_model("judge", default="mimo-v2-pro")
 
 MAX_RETRIES = 2
 

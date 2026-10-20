@@ -10,7 +10,8 @@ import re
 from pathlib import Path
 
 BASE_DIR = Path("/mnt/v/evey")
-CONFIG_PATH = Path(os.path.expanduser("~/.hermes/config/sandbox.yaml"))
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
+CONFIG_PATH = HERMES_HOME / "config" / "sandbox.yaml"
 if not CONFIG_PATH.exists():
     CONFIG_PATH = BASE_DIR / "config" / "sandbox.yaml"
 

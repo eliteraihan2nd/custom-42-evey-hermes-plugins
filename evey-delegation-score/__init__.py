@@ -12,7 +12,7 @@ import json
 import os
 from datetime import datetime, timedelta
 
-SCORES_FILE = os.path.expanduser("~/.hermes/workspace/delegation-scores.jsonl")
+SCORES_FILE = os.path.join(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"), "workspace", "delegation-scores.jsonl")
 
 VALID_TASK_TYPES = {"code", "research", "analysis", "creative", "summary"}
 

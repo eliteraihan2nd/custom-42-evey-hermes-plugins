@@ -21,7 +21,8 @@ from pathlib import Path
 
 logger = logging.getLogger("evey.proactive")
 
-STATE_FILE = Path(os.path.expanduser("~/.hermes/workspace/manager/proactive-state.json"))
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
+STATE_FILE = HERMES_HOME / "workspace" / "manager" / "proactive-state.json"
 
 DEFAULT_STATE = {
     "date": "",

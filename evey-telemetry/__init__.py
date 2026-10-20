@@ -2,7 +2,8 @@
 
 Emits structured JSON events for every tool call, delegation, error,
 and key agent action. Events go to a rotating log file at
-~/.hermes/telemetry/events.jsonl for dashboard consumption.
+<this process's hermes home>/telemetry/events.jsonl for dashboard
+consumption (resolved at call time, see ``_telemetry_dir``).
 
 Provides a telemetry_query tool for Evey to inspect her own metrics.
 """
@@ -17,8 +18,24 @@ from pathlib import Path
 
 logger = logging.getLogger("evey.telemetry")
 
-TELEMETRY_DIR = Path(os.path.expanduser("~/.hermes/telemetry"))
-EVENTS_FILE = TELEMETRY_DIR / "events.jsonl"
+
+def _telemetry_dir() -> Path:
+    """Telemetry dir of the Hermes home THIS process runs as (D-B).
+
+    Resolved per call — an import-time constant is what let the path drift
+    silently away from the home the process actually runs as.
+    """
+    try:
+        from hermes_constants import get_hermes_home  # in-process plugin: the module is importable
+        return Path(get_hermes_home()) / "telemetry"
+    except Exception:  # standalone/unhardened import
+        return Path(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")) / "telemetry"
+
+
+def _events_file() -> Path:
+    return _telemetry_dir() / "events.jsonl"
+
+
 MAX_EVENTS_FILE_SIZE = 10 * 1024 * 1024  # 10MB before rotation
 
 # In-memory metrics for the current session
@@ -34,16 +51,17 @@ SESSION_METRICS = {
 
 
 def _ensure_dir():
-    TELEMETRY_DIR.mkdir(parents=True, exist_ok=True)
+    _telemetry_dir().mkdir(parents=True, exist_ok=True)
 
 
 def _rotate_if_needed():
     """Rotate events file if it exceeds max size."""
-    if EVENTS_FILE.exists() and EVENTS_FILE.stat().st_size > MAX_EVENTS_FILE_SIZE:
-        rotated = TELEMETRY_DIR / f"events.{int(time.time())}.jsonl"
-        EVENTS_FILE.rename(rotated)
+    events_file = _events_file()
+    if events_file.exists() and events_file.stat().st_size > MAX_EVENTS_FILE_SIZE:
+        rotated = events_file.parent / f"events.{int(time.time())}.jsonl"
+        events_file.rename(rotated)
         # Keep only last 5 rotated files
-        rotated_files = sorted(TELEMETRY_DIR.glob("events.*.jsonl"))
+        rotated_files = sorted(events_file.parent.glob("events.*.jsonl"))
         for old in rotated_files[:-5]:
             old.unlink(missing_ok=True)
 
@@ -59,7 +77,7 @@ def emit_event(event_type, data=None):
             "type": event_type,
             **(data or {}),
         }
-        with open(EVENTS_FILE, "a") as f:
+        with open(_events_file(), "a") as f:
             f.write(json.dumps(event, default=str) + "\n")
         SESSION_METRICS["events_emitted"] += 1
     except Exception as e:
@@ -80,6 +98,25 @@ def track_tool_call(tool_name, duration_ms=0, success=True, tokens=0, error=None
         "tokens": tokens,
         "error": str(error)[:200] if error else None,
     })
+
+
+def _on_post_tool_call(tool_name="", duration_ms=0, status=None, error_message=None, **kwargs):
+    """Hermes ``post_tool_call`` adapter.
+
+    The hook payload carries the tool name, its duration and an ``ok``/``error``
+    status; tokens are not reported there, so they stay 0. ``**kwargs`` is required
+    by the plugin contract (forward compatibility). Any failure here must degrade
+    to a no-op — telemetry never breaks a tool call.
+    """
+    try:
+        track_tool_call(
+            tool_name or "unknown",
+            duration_ms=duration_ms or 0,
+            success=status != "error",
+            error=error_message,
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug(f"post_tool_call hook failed: {e}")
 
 
 def track_delegation(model, task_type, duration_ms=0, success=True, tokens=0, error=None):
@@ -147,12 +184,13 @@ QUERY_SCHEMA = {
 
 
 def _read_recent_events(limit=50, event_type=None):
-    """Read recent events from the log file."""
-    if not EVENTS_FILE.exists():
+    """Read recent events from this process's log file."""
+    events_file = _events_file()
+    if not events_file.exists():
         return []
     events = []
     try:
-        with open(EVENTS_FILE, "r") as f:
+        with open(events_file, "r") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -168,7 +206,7 @@ def _read_recent_events(limit=50, event_type=None):
     return events[-limit:]
 
 
-def query_handler(args, **kwargs):
+def _query_impl(args, **kwargs):
     query_type = args.get("query_type", "session_metrics")
     limit = int(args.get("limit", 20))
 
@@ -229,6 +267,19 @@ def query_handler(args, **kwargs):
     return json.dumps({"status": "error", "message": f"Unknown query type: {query_type}"})
 
 
+def query_handler(args, **kwargs):
+    """``_query_impl`` plus the provenance of the answer.
+
+    ``path``/``home`` name the file that was read and ``sid`` this session's id,
+    so a near-empty answer is explainable instead of looking like "no events".
+    """
+    result = json.loads(_query_impl(args, **kwargs))
+    result["path"] = str(_events_file())
+    result["home"] = str(_telemetry_dir().parent)
+    result["sid"] = SESSION_METRICS["session_id"]
+    return json.dumps(result)
+
+
 def register(ctx):
     _ensure_dir()
     emit_event("plugin_loaded", {"plugin": "evey-telemetry", "version": "1.0.0"})
@@ -238,4 +289,5 @@ def register(ctx):
         schema=QUERY_SCHEMA,
         handler=query_handler,
     )
+    ctx.register_hook("post_tool_call", _on_post_tool_call)
     logger.info("evey-telemetry plugin loaded — structured logging active")

@@ -17,6 +17,12 @@ import time
 import urllib.request
 import urllib.error
 
+import importlib.util as _iu, os as _os
+_spec = _iu.spec_from_file_location("evey_utils", _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "evey_utils.py"))
+_eu = _iu.module_from_spec(_spec)
+_spec.loader.exec_module(_eu)
+resolve_models = _eu.resolve_models
+
 logger = logging.getLogger("evey.delegate_model")
 
 # Telemetry integration — track all delegations
@@ -26,8 +32,16 @@ try:
 except Exception:
     _telemetry = None
 
-LITELLM_URL = os.environ.get("OPENAI_BASE_URL", "")
+# EEVEY_LITELLM_URL wins over OPENAI_BASE_URL (Hermes reads the latter as its own
+# custom endpoint). The public gateway zone bans urllib's default User-Agent with
+# Cloudflare 1010, so this plugin's own HTTP call needs the same browser UA the
+# shared util sends.
+LITELLM_URL = os.environ.get("EEVEY_LITELLM_URL") or os.environ.get("OPENAI_BASE_URL", "")
 LITELLM_KEY = os.environ.get("OPENAI_API_KEY", "")
+_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 
 # Max retries per individual model before falling through to the next
 MAX_RETRIES_PER_MODEL = 3
@@ -62,31 +76,29 @@ SCHEMA = {
     },
 }
 
-FALLBACK_CHAIN = [
-    "mimo-v2-pro",       # FREE via OpenClaw — confirmed working with reasoning:exclude
-    "nemotron-free",     # CONFIRMED working, no think-block issues
-    "llama70b-free",     # works when not rate limited
-]
+FALLBACK_CHAIN = resolve_models(
+    "delegate", default=["mimo-v2-pro", "nemotron-free", "llama70b-free"]
+)
 
-# Smart routing — ALL delegation goes to FREE CLOUD models
-# NEVER use local models for delegation (GPU overload → black screen)
-# Local Ollama is ONLY for hermes-agent brain's smart routing (cheap turns)
-# Priority: confirmed-working models first, then others as fallback
-# mimo-v2-pro: FREE, 1T params, works with reasoning:exclude
-# nemotron-free: FREE, reliable, no think-block issues
-# llama70b-free: FREE, reliable but rate-limited
-# step-flash-free: FREE, works with reasoning:exclude (MoE 196B)
-# qwen-coder-free: FREE, works with reasoning:exclude (best coder)
+# Smart routing — one DISTINCT model per task type.
+# Upstream listed the same three dead aliases in every row, which made the
+# "smart routing" a no-op: every task went to one model. The model map gives
+# each task type its own upstream, so a code task and a research task are
+# genuinely different models. Override per role via plugins.evey-model-map.
+_TASK_ROLES = {
+    "code": "code",
+    "reasoning": "reasoning",
+    "research": "research",
+    "creative": "creative",
+    "summary": "summary",
+    "analysis": "analysis",
+    "uncensored": "uncensored",
+    "vision": "vision",
+    "multimodal": "vision",
+}
 TASK_ROUTING = {
-    "code": ["mimo-v2-pro", "qwen-coder-free", "nemotron-free"],
-    "reasoning": ["mimo-v2-pro", "step-flash-free", "nemotron-free"],
-    "research": ["mimo-v2-pro", "nemotron-free", "llama70b-free"],
-    "creative": ["mimo-v2-pro", "nemotron-free", "llama70b-free"],
-    "summary": ["mimo-v2-pro", "nemotron-free", "nemotron-nano-free"],
-    "analysis": ["mimo-v2-pro", "step-flash-free", "nemotron-free"],
-    "uncensored": ["mimo-v2-pro", "llama70b-free"],
-    "vision": ["mimo-v2-pro"],
-    "multimodal": ["mimo-v2-pro"],
+    task: resolve_models(role, default=FALLBACK_CHAIN)
+    for task, role in _TASK_ROLES.items()
 }
 
 # Sensitive keywords — route to LOCAL ONLY (never external)
@@ -150,6 +162,7 @@ def _call_model(model, prompt, max_tokens=2000):
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {LITELLM_KEY}",
+                    "User-Agent": _UA,
                 },
             )
             with urllib.request.urlopen(req, timeout=120) as resp:

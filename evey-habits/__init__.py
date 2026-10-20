@@ -21,7 +21,8 @@ from pathlib import Path
 
 logger = logging.getLogger("evey.habits")
 
-HABITS_FILE = Path(os.path.expanduser("~/.hermes/workspace/manager/habits.json"))
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
+HABITS_FILE = HERMES_HOME / "workspace" / "manager" / "habits.json"
 
 DEFAULT_DATA = {
     "interactions": [],

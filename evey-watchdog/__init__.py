@@ -18,7 +18,8 @@ from pathlib import Path
 
 logger = logging.getLogger("evey.watchdog")
 
-STATE_FILE = Path(os.path.expanduser("~/.hermes/workspace/watchdog-state.json"))
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
+STATE_FILE = HERMES_HOME / "workspace" / "watchdog-state.json"
 NTFY_URL = os.environ.get("NTFY_URL", "http://hermes-ntfy:80")
 SILENT_THRESHOLD_MINUTES = 120  # 2 hours
 WORK_HOURS = (9, 21)  # 9am to 9pm

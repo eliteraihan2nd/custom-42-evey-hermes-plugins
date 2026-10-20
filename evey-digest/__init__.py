@@ -8,6 +8,31 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+# Shared util: load by file path. The bare `from evey_utils import ...` upstream
+# assumes the plugins/ directory is on sys.path at call time; it is not.
+import importlib.util as _iu, os as _os
+
+
+def _load_evey_utils():
+    """Load the shared evey_utils module.
+
+    Sibling first: a plugin dir that carries its own copy is self-contained.
+    Parent second: the whole-repo layout, where evey_utils.py sits one level up.
+    """
+    for _cand in (
+        _os.path.join(_os.path.dirname(__file__), "evey_utils.py"),
+        _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "evey_utils.py"),
+    ):
+        if _os.path.exists(_cand):
+            _spec = _iu.spec_from_file_location("evey_utils", _cand)
+            _mod = _iu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            return _mod
+    raise ImportError("evey_utils.py not found next to or above this plugin")
+
+
+_eu = _load_evey_utils()
+
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
 LANGFUSE_URL = os.environ.get("LANGFUSE_HOST", "")
 LANGFUSE_PK = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
@@ -40,8 +65,7 @@ def _http_get(url, headers=None):
         except Exception:
             return None
     else:
-        from evey_utils import http_get_json
-        return http_get_json(url, timeout=HTTP_TIMEOUT)
+        return _eu.http_get_json(url, timeout=HTTP_TIMEOUT)
 
 
 def _langfuse_auth_header():

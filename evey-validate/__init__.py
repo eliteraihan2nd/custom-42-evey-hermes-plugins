@@ -15,12 +15,32 @@ import os
 import re
 
 import importlib.util as _iu, os as _os
-_spec = _iu.spec_from_file_location("evey_utils", _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "evey_utils.py"))
-_eu = _iu.module_from_spec(_spec)
-_spec.loader.exec_module(_eu)
+
+
+def _load_evey_utils():
+    """Load the shared evey_utils module.
+
+    Sibling first: a plugin dir that carries its own copy is self-contained.
+    Parent second: the whole-repo layout, where evey_utils.py sits one level up.
+    """
+    for _cand in (
+        _os.path.join(_os.path.dirname(__file__), "evey_utils.py"),
+        _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "evey_utils.py"),
+    ):
+        if _os.path.exists(_cand):
+            _spec = _iu.spec_from_file_location("evey_utils", _cand)
+            _mod = _iu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            return _mod
+    raise ImportError("evey_utils.py not found next to or above this plugin")
+
+
+_eu = _load_evey_utils()
 call_llm = _eu.call_llm
 
-VALIDATE_MODEL = "qwen35-4b"
+# Upstream pinned "qwen35-4b", a local model that no longer exists on the host
+# gateway. The "validate" role resolves through the model map instead.
+VALIDATE_MODEL = _eu.resolve_model("validate", default="qwen35-4b")
 
 SCHEMA = {
     "name": "validate_output",
@@ -78,7 +98,11 @@ Example: SCORE: 7 | ISSUES: Version number unverified, otherwise solid"""
 
 
 def _validate_llm(prompt):
-    result = call_llm(VALIDATE_MODEL, prompt, max_tokens=100, temperature=0)
+    # Upstream budget was 100 tokens; on a reasoning-model target the budget is consumed
+    # by reasoning (finish_reason=length, no "SCORE: N" in the output), so the caller
+    # silently fell back to score 5 / CAUTION for correct input. 400 returns a real
+    # assessment.
+    result = call_llm(VALIDATE_MODEL, prompt, max_tokens=400, temperature=0)
     return result or "SCORE: 5 | ISSUES: Validation unavailable"
 
 
