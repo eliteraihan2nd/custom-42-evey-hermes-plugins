@@ -42,7 +42,7 @@ alias silently collapses "smart routing" into *one model, asked N times*.
 
 | role | model | upstream served |
 |---|---|---|
-| `code` | `combo/fast-mini` | `cohere/north-mini-code:free` |
+| `code` | `combo-free-main-text-256k` | `minimax/minimax-m3.1-flash:free` (served 2026-10-22) |
 | `reasoning` | `kc/nvidia/nemotron-3-ultra-550b-a55b:free` | `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | `research` / `summary` | `th/mimo-v2.6-flash:free` | `mimo-v2.6-flash:free` |
 | `analysis` | `openrouter/poolside/laguna-s-2.1:free` | `poolside/laguna-s-2.1:free` |

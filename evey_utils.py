@@ -60,7 +60,7 @@ LITELLM_KEY = os.environ.get("OPENAI_API_KEY", "")
 #
 # Verified live 2026-10-20 against /v1/chat/completions (HTTP 200 + non-empty
 # content + the upstream named in the response "model" field):
-#   combo/fast-mini                             -> cohere/north-mini-code:free
+#   combo-free-main-text-256k                   -> minimax/minimax-m3.1-flash:free  (verified 2026-10-22)
 #   kc/nvidia/nemotron-3-ultra-550b-a55b:free    -> nvidia/nemotron-3-ultra-550b-a55b:free
 #   cmd/nvidia/nemotron-3-ultra-550b-a55b        -> nvidia/nemotron-3-ultra-550b-a55b
 #   th/mimo-v2.6-flash:free                      -> mimo-v2.6-flash:free
@@ -78,7 +78,7 @@ LITELLM_KEY = os.environ.get("OPENAI_API_KEY", "")
 DEFAULT_MODEL_MAP = {
     # role → ordered candidate list (first is preferred, rest are fallbacks)
     "code": [
-        "combo/fast-mini",
+        "combo-free-main-text-256k",
         "kc/nvidia/nemotron-3-ultra-550b-a55b:free",
         "cmd/nvidia/nemotron-3-ultra-550b-a55b",
     ],
